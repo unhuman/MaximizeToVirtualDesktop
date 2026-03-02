@@ -16,6 +16,7 @@ internal sealed class TrayApplication : Form
     private uint _shellRestartMessage;
     private bool _comInitialized;
 
+    private readonly AppSettings _settings;
     private readonly NotifyIcon _trayIcon;
     private readonly VirtualDesktopService _vds;
     private readonly FullScreenTracker _tracker;
@@ -40,18 +41,21 @@ internal sealed class TrayApplication : Form
         Opacity = 0;
         Size = new Size(0, 0);
 
+        // Load persisted settings first so all components use them
+        _settings = AppSettings.Load();
+
         // Initialize components
         _vds = new VirtualDesktopService();
         _tracker = new FullScreenTracker();
         _manager = new FullScreenManager(_vds, _tracker);
         _monitor = new WindowMonitor(_manager, _tracker, this);
-        _mouseHook = new MaximizeButtonHook(_manager, this);
+        _mouseHook = new MaximizeButtonHook(_manager, this, _settings);
 
         // System tray icon
         _trayIcon = new NotifyIcon
         {
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application,
-            Text = "Maximize to Virtual Desktop\nCtrl+Alt+Shift+X | Shift+Click | Ctrl+Alt+Shift+P to pin",
+            Text = BuildTooltipText(),
             Visible = true,
             ContextMenuStrip = BuildContextMenu()
         };
@@ -109,7 +113,7 @@ internal sealed class TrayApplication : Form
                     _retryTimer!.Stop();
                     _retryTimer.Dispose();
                     _retryTimer = null;
-                    _trayIcon.Text = "Maximize to Virtual Desktop\nCtrl+Alt+Shift+X | Shift+Click | Ctrl+Alt+Shift+P to pin";
+                    _trayIcon.Text = BuildTooltipText();
                     StartMonitoring();
                     return;
                 }
@@ -148,25 +152,25 @@ internal sealed class TrayApplication : Form
 
         // Register hotkey if not already registered
         if (!NativeMethods.RegisterHotKey(Handle, HOTKEY_ID,
-            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT,
-            NativeMethods.VK_X))
+            _settings.HotkeyModifiers | NativeMethods.MOD_NOREPEAT,
+            _settings.HotkeyKey))
         {
             Trace.WriteLine("TrayApplication: Failed to register hotkey (may already be registered).");
         }
         else
         {
-            Trace.WriteLine("TrayApplication: Registered hotkey Ctrl+Alt+Shift+X");
+            Trace.WriteLine($"TrayApplication: Registered hotkey {FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyKey)}");
         }
 
         if (!NativeMethods.RegisterHotKey(Handle, HOTKEY_PIN_ID,
-            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT,
-            NativeMethods.VK_P))
+            _settings.PinHotkeyModifiers | NativeMethods.MOD_NOREPEAT,
+            _settings.PinHotkeyKey))
         {
             Trace.WriteLine("TrayApplication: Failed to register pin hotkey.");
         }
         else
         {
-            Trace.WriteLine("TrayApplication: Registered hotkey Ctrl+Alt+Shift+P");
+            Trace.WriteLine($"TrayApplication: Registered pin hotkey {FormatHotkey(_settings.PinHotkeyModifiers, _settings.PinHotkeyKey)}");
         }
     }
 
@@ -201,7 +205,7 @@ internal sealed class TrayApplication : Form
                 _retryTimer?.Stop();
                 _retryTimer?.Dispose();
                 _retryTimer = null;
-                _trayIcon.Text = "Maximize to Virtual Desktop\nCtrl+Alt+Shift+X | Shift+Click | Ctrl+Alt+Shift+P to pin";
+                _trayIcon.Text = BuildTooltipText();
                 StartMonitoring();
             }
             return;
@@ -273,9 +277,15 @@ internal sealed class TrayApplication : Form
 
         var howToUseItem = new ToolStripMenuItem("How to Use", null, (_, _) =>
         {
-            ShowUsageInfo();
+            ShowUsageInfo(_settings);
         });
         menu.Items.Add(howToUseItem);
+
+        var settingsItem = new ToolStripMenuItem("Settings...", null, (_, _) =>
+        {
+            OpenSettings();
+        });
+        menu.Items.Add(settingsItem);
 
         menu.Items.Add(new ToolStripSeparator());
 
@@ -294,6 +304,38 @@ internal sealed class TrayApplication : Form
         menu.Items.Add(exitItem);
 
         return menu;
+    }
+
+    private void OpenSettings()
+    {
+        using var dlg = new SettingsDialog(_settings);
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+
+        dlg.ApplyToSettings();
+        _settings.Save();
+
+        // Re-register hotkeys with the new configuration
+        NativeMethods.UnregisterHotKey(Handle, HOTKEY_ID);
+        NativeMethods.UnregisterHotKey(Handle, HOTKEY_PIN_ID);
+
+        if (_comInitialized)
+        {
+            if (!NativeMethods.RegisterHotKey(Handle, HOTKEY_ID,
+                _settings.HotkeyModifiers | NativeMethods.MOD_NOREPEAT,
+                _settings.HotkeyKey))
+            {
+                Trace.WriteLine("TrayApplication: Failed to register hotkey after settings change.");
+            }
+            if (!NativeMethods.RegisterHotKey(Handle, HOTKEY_PIN_ID,
+                _settings.PinHotkeyModifiers | NativeMethods.MOD_NOREPEAT,
+                _settings.PinHotkeyKey))
+            {
+                Trace.WriteLine("TrayApplication: Failed to register pin hotkey after settings change.");
+            }
+        }
+
+        _trayIcon.Text = BuildTooltipText();
+        Trace.WriteLine("TrayApplication: Settings saved and hotkeys updated.");
     }
 
     private async Task CheckForUpdatesAsync(bool userInitiated = false, bool comFailure = false)
@@ -361,11 +403,15 @@ internal sealed class TrayApplication : Form
             Directory.CreateDirectory(Path.GetDirectoryName(FirstRunMarker)!);
             File.WriteAllText(FirstRunMarker, "");
 
+            var maximizeKey = FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyKey);
+            var pinKey = FormatHotkey(_settings.PinHotkeyModifiers, _settings.PinHotkeyKey);
+            var clickDesc = _settings.InvertShiftClick ? "Click" : "Shift+Click";
+
             _trayIcon.BalloonTipTitle = "Maximize to Virtual Desktop";
             _trayIcon.BalloonTipText =
-                "Press Ctrl+Alt+Shift+X or Shift+Click the maximize button " +
+                $"Press {maximizeKey} or {clickDesc} the maximize button " +
                 "to maximize a window to its own virtual desktop.\n" +
-                "Press Ctrl+Alt+Shift+P to pin a window to all desktops.";
+                $"Press {pinKey} to pin a window to all desktops.";
             _trayIcon.BalloonTipIcon = ToolTipIcon.Info;
             _trayIcon.ShowBalloonTip(5000);
         }
@@ -375,7 +421,7 @@ internal sealed class TrayApplication : Form
         }
     }
 
-    private static void ShowUsageInfo()
+    private static void ShowUsageInfo(AppSettings settings)
     {
         using var form = new Form
         {
@@ -409,12 +455,21 @@ internal sealed class TrayApplication : Form
         rtb.SelectionFont = new Font("Segoe UI Variable Display", 14f, FontStyle.Bold);
         rtb.AppendText("Maximize to Virtual Desktop\n\n");
 
+        var maximizeKey = FormatHotkey(settings.HotkeyModifiers, settings.HotkeyKey);
+        var pinKey = FormatHotkey(settings.PinHotkeyModifiers, settings.PinHotkeyKey);
+        var clickDesc = settings.InvertShiftClick
+            ? "Click maximize button"
+            : "Shift + Click maximize button";
+        var clickInstruction = settings.InvertShiftClick
+            ? "Click any window's maximize button. Hold Shift for a normal maximize."
+            : "Hold Shift and click any window's maximize button.";
+
         AppendSection(rtb, "Maximize a Window to Its Own Desktop",
-            ("Ctrl + Alt + Shift + X", "Toggles the focused window to/from its own virtual desktop."),
-            ("Shift + Click maximize button", "Hold Shift and click any window's maximize button."));
+            (maximizeKey, "Toggles the focused window to/from its own virtual desktop."),
+            (clickDesc, clickInstruction));
 
         AppendSection(rtb, "Pin a Window to All Desktops",
-            ("Ctrl + Alt + Shift + P", "Toggles pin/unpin so the focused window appears on every desktop."));
+            (pinKey, "Toggles pin/unpin so the focused window appears on every desktop."));
 
         AppendSection(rtb, "How It Works",
             ("Maximize", "The window moves to a new virtual desktop and is maximized full-screen."),
@@ -469,6 +524,32 @@ internal sealed class TrayApplication : Form
         {
             return 0;
         }
+    }
+
+    private string BuildTooltipText()
+    {
+        var maximize = FormatHotkey(_settings.HotkeyModifiers, _settings.HotkeyKey);
+        var pin = FormatHotkey(_settings.PinHotkeyModifiers, _settings.PinHotkeyKey);
+        var click = _settings.InvertShiftClick ? "Click maximize" : "Shift+Click maximize";
+        return $"Maximize to Virtual Desktop\n{maximize} | {click} | {pin} to pin";
+    }
+
+    private static string FormatHotkey(uint modifiers, uint vk)
+    {
+        var parts = new List<string>();
+        if ((modifiers & NativeMethods.MOD_CONTROL) != 0) parts.Add("Ctrl");
+        if ((modifiers & NativeMethods.MOD_ALT) != 0) parts.Add("Alt");
+        if ((modifiers & NativeMethods.MOD_SHIFT) != 0) parts.Add("Shift");
+        if ((modifiers & NativeMethods.MOD_WIN) != 0) parts.Add("Win");
+        parts.Add(GetKeyName(vk));
+        return string.Join("+", parts);
+    }
+
+    private static string GetKeyName(uint vk)
+    {
+        if (vk >= 'A' && vk <= 'Z') return ((char)vk).ToString();
+        if (vk >= 0x70 && vk <= 0x7B) return $"F{vk - 0x70 + 1}";
+        return $"0x{vk:X2}";
     }
 
     private void RecoverOrphanedDesktops()
