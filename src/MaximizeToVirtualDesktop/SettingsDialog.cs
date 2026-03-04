@@ -22,6 +22,7 @@ internal sealed class SettingsDialog : Form
     private static readonly (string Name, uint Vk)[] SupportedKeys =
     [
         .. Enumerable.Range('A', 26).Select(c => (((char)c).ToString(), (uint)c)),
+        .. Enumerable.Range('0', 10).Select(c => (((char)c).ToString(), (uint)c)),
         .. Enumerable.Range(1, 12).Select(i => ($"F{i}", (uint)(0x70 + i - 1))),
     ];
 
@@ -29,8 +30,12 @@ internal sealed class SettingsDialog : Form
     {
         _settings = settings;
 
+        SuspendLayout();
+
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
+
         Text = "Settings — Maximize to Virtual Desktop";
-        ClientSize = new Size(420, 310);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -38,83 +43,109 @@ internal sealed class SettingsDialog : Form
         ShowInTaskbar = false;
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
-        int y = 10;
+        int margin = 14;
+        int grpW = 460;
+        int y = margin + 4;
 
         // Maximize hotkey group
-        var grpMaximize = new GroupBox { Text = "Maximize Hotkey", Location = new Point(12, y), Size = new Size(396, 64) };
+        var grpMaximize = new GroupBox { Text = "Maximize Hotkey", Location = new Point(margin, y), Size = new Size(grpW, 72) };
         Controls.Add(grpMaximize);
         (_chkHotkeyCtrl, _chkHotkeyAlt, _chkHotkeyShift, _chkHotkeyWin, _cmbHotkeyKey) =
             AddHotkeyRow(grpMaximize, settings.HotkeyModifiers, settings.HotkeyKey);
-        y += 72;
+        y += grpMaximize.Height + 12;
 
         // Pin hotkey group
-        var grpPin = new GroupBox { Text = "Pin Hotkey", Location = new Point(12, y), Size = new Size(396, 64) };
+        var grpPin = new GroupBox { Text = "Pin Hotkey", Location = new Point(margin, y), Size = new Size(grpW, 72) };
         Controls.Add(grpPin);
         (_chkPinCtrl, _chkPinAlt, _chkPinShift, _chkPinWin, _cmbPinKey) =
             AddHotkeyRow(grpPin, settings.PinHotkeyModifiers, settings.PinHotkeyKey);
-        y += 72;
+        y += grpPin.Height + 12;
 
         // Behavior group
-        var grpBehavior = new GroupBox { Text = "Behavior", Location = new Point(12, y), Size = new Size(396, 72) };
+        var grpBehavior = new GroupBox { Text = "Behavior", Location = new Point(margin, y), Size = new Size(grpW, 80) };
         Controls.Add(grpBehavior);
         _chkInvertShiftClick = new CheckBox
         {
-            Text = "Always maximize to virtual desktop on maximize button click\r\n" +
+            Text = "Always maximize to virtual desktop on click\r\n" +
                    "(Shift+Click performs a normal maximize instead)",
-            Location = new Point(12, 20),
-            Size = new Size(372, 42),
+            AutoSize = true,
             Checked = settings.InvertShiftClick,
+            Location = new Point(10, 28),
         };
         grpBehavior.Controls.Add(_chkInvertShiftClick);
-        y += 80;
+        y += grpBehavior.Height + 16;
 
-        // Buttons
-        y += 6;
+        // Buttons — uniform height, Reset Defaults right-aligned
+        int btnW = 90;
+        int btnResetW = 130;
+        int btnH = 30;
         var btnOk = new Button
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(12, y),
-            Size = new Size(80, 28),
+            Location = new Point(margin, y),
+            Size = new Size(btnW, btnH),
             FlatStyle = FlatStyle.System,
         };
         var btnCancel = new Button
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(100, y),
-            Size = new Size(80, 28),
+            Location = new Point(margin + btnW + 8, y),
+            Size = new Size(btnW, btnH),
             FlatStyle = FlatStyle.System,
         };
         var btnReset = new Button
         {
             Text = "Reset Defaults",
-            Location = new Point(192, y),
-            Size = new Size(110, 28),
+            Location = new Point(margin + grpW - btnResetW, y),
+            Size = new Size(btnResetW, btnH),
             FlatStyle = FlatStyle.System,
         };
         btnReset.Click += (_, _) => ResetDefaults();
+        btnOk.Click += (_, e) =>
+        {
+            var error = ValidateHotkeys();
+            if (error != null)
+            {
+                MessageBox.Show(error, "Invalid Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                DialogResult = DialogResult.None;
+            }
+        };
 
         Controls.AddRange(new Control[] { btnOk, btnCancel, btnReset });
         AcceptButton = btnOk;
         CancelButton = btnCancel;
 
-        ClientSize = new Size(420, y + 44);
+        ClientSize = new Size(margin + grpW + margin, y + btnH + margin);
+
+        ResumeLayout(false);
+        PerformLayout();
     }
 
     private static (CheckBox ctrl, CheckBox alt, CheckBox shift, CheckBox win, ComboBox key)
         AddHotkeyRow(GroupBox grp, uint modifiers, uint vk)
     {
-        var chkCtrl  = new CheckBox { Text = "Ctrl",  Checked = (modifiers & NativeMethods.MOD_CONTROL) != 0, AutoSize = true, Location = new Point(12,  28) };
-        var chkAlt   = new CheckBox { Text = "Alt",   Checked = (modifiers & NativeMethods.MOD_ALT)     != 0, AutoSize = true, Location = new Point(68,  28) };
-        var chkShift = new CheckBox { Text = "Shift", Checked = (modifiers & NativeMethods.MOD_SHIFT)   != 0, AutoSize = true, Location = new Point(118, 28) };
-        var chkWin   = new CheckBox { Text = "Win",   Checked = (modifiers & NativeMethods.MOD_WIN)     != 0, AutoSize = true, Location = new Point(182, 28) };
-        var lblKey   = new Label    { Text = "Key:",  AutoSize = true, Location = new Point(244, 30) };
+        // FlowLayoutPanel inside the group box handles DPI scaling for the row
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Location = new Point(6, 26),
+        };
+
+        var chkCtrl  = new CheckBox { Text = "Ctrl",  Checked = (modifiers & NativeMethods.MOD_CONTROL) != 0, AutoSize = true, Margin = new Padding(2, 2, 4, 0) };
+        var chkAlt   = new CheckBox { Text = "Alt",   Checked = (modifiers & NativeMethods.MOD_ALT)     != 0, AutoSize = true, Margin = new Padding(2, 2, 4, 0) };
+        var chkShift = new CheckBox { Text = "Shift", Checked = (modifiers & NativeMethods.MOD_SHIFT)   != 0, AutoSize = true, Margin = new Padding(2, 2, 4, 0) };
+        var chkWin   = new CheckBox { Text = "Win",   Checked = (modifiers & NativeMethods.MOD_WIN)     != 0, AutoSize = true, Margin = new Padding(2, 2, 10, 0) };
+        var lblKey   = new Label    { Text = "Key:",  AutoSize = true, Margin = new Padding(2, 5, 2, 0) };
         var cmb = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(278, 26),
-            Size = new Size(72, 24),
+            Width = 60,
+            Margin = new Padding(2, 2, 0, 0),
         };
 
         foreach (var (name, _) in SupportedKeys)
@@ -123,7 +154,8 @@ internal sealed class SettingsDialog : Form
         var idx = Array.FindIndex(SupportedKeys, k => k.Vk == vk);
         cmb.SelectedIndex = Math.Max(0, idx);
 
-        grp.Controls.AddRange(new Control[] { chkCtrl, chkAlt, chkShift, chkWin, lblKey, cmb });
+        row.Controls.AddRange(new Control[] { chkCtrl, chkAlt, chkShift, chkWin, lblKey, cmb });
+        grp.Controls.Add(row);
         return (chkCtrl, chkAlt, chkShift, chkWin, cmb);
     }
 
@@ -142,6 +174,30 @@ internal sealed class SettingsDialog : Form
         _cmbPinKey.SelectedIndex = Array.FindIndex(SupportedKeys, k => k.Vk == NativeMethods.VK_P);
 
         _chkInvertShiftClick.Checked = false;
+    }
+
+    /// <summary>Returns an error message if the current hotkey configuration is invalid, or null if valid.</summary>
+    private string? ValidateHotkeys()
+    {
+        uint hotkeyMod = BuildModifiers(_chkHotkeyCtrl, _chkHotkeyAlt, _chkHotkeyShift, _chkHotkeyWin);
+        uint pinMod    = BuildModifiers(_chkPinCtrl, _chkPinAlt, _chkPinShift, _chkPinWin);
+
+        if (hotkeyMod == 0)
+            return "Maximize hotkey needs at least one modifier (Ctrl, Alt, Shift, or Win).";
+        if (pinMod == 0)
+            return "Pin hotkey needs at least one modifier (Ctrl, Alt, Shift, or Win).";
+        if (_cmbHotkeyKey.SelectedIndex < 0)
+            return "Please select a key for the maximize hotkey.";
+        if (_cmbPinKey.SelectedIndex < 0)
+            return "Please select a key for the pin hotkey.";
+
+        uint hotkeyVk = SupportedKeys[_cmbHotkeyKey.SelectedIndex].Vk;
+        uint pinVk    = SupportedKeys[_cmbPinKey.SelectedIndex].Vk;
+
+        if (hotkeyMod == pinMod && hotkeyVk == pinVk)
+            return "Maximize and Pin hotkeys cannot be the same combination.";
+
+        return null;
     }
 
     /// <summary>Writes the dialog's current values back into the <see cref="AppSettings"/> object.</summary>

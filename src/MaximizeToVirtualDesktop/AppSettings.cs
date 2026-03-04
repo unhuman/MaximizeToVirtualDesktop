@@ -49,16 +49,21 @@ internal sealed class AppSettings
         }
     }
 
-    public void Save()
+    public bool Save()
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            var dir = Path.GetDirectoryName(FilePath)!;
+            Directory.CreateDirectory(dir);
+            var tmp = Path.Combine(dir, "settings.tmp");
+            File.WriteAllText(tmp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, FilePath, overwrite: true);
+            return true;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"AppSettings: Save failed: {ex.Message}");
+            return false;
         }
     }
 }

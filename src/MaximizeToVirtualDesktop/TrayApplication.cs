@@ -312,7 +312,12 @@ internal sealed class TrayApplication : Form
         if (dlg.ShowDialog() != DialogResult.OK) return;
 
         dlg.ApplyToSettings();
-        _settings.Save();
+        if (!_settings.Save())
+        {
+            MessageBox.Show(
+                "Settings could not be saved. Your changes will apply for this session but won't persist after restart.",
+                "Save Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
 
         // Re-register hotkeys with the new configuration
         NativeMethods.UnregisterHotKey(Handle, HOTKEY_ID);
@@ -320,17 +325,26 @@ internal sealed class TrayApplication : Form
 
         if (_comInitialized)
         {
+            var failures = new List<string>();
             if (!NativeMethods.RegisterHotKey(Handle, HOTKEY_ID,
                 _settings.HotkeyModifiers | NativeMethods.MOD_NOREPEAT,
                 _settings.HotkeyKey))
             {
                 Trace.WriteLine("TrayApplication: Failed to register hotkey after settings change.");
+                failures.Add("Maximize hotkey");
             }
             if (!NativeMethods.RegisterHotKey(Handle, HOTKEY_PIN_ID,
                 _settings.PinHotkeyModifiers | NativeMethods.MOD_NOREPEAT,
                 _settings.PinHotkeyKey))
             {
                 Trace.WriteLine("TrayApplication: Failed to register pin hotkey after settings change.");
+                failures.Add("Pin hotkey");
+            }
+            if (failures.Count > 0)
+            {
+                MessageBox.Show(
+                    $"Could not register: {string.Join(", ", failures)}.\n\nThe shortcut may already be in use by another application.",
+                    "Hotkey Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -547,6 +561,7 @@ internal sealed class TrayApplication : Form
 
     private static string GetKeyName(uint vk)
     {
+        if (vk >= '0' && vk <= '9') return ((char)vk).ToString();
         if (vk >= 'A' && vk <= 'Z') return ((char)vk).ToString();
         if (vk >= 0x70 && vk <= 0x7B) return $"F{vk - 0x70 + 1}";
         return $"0x{vk:X2}";
