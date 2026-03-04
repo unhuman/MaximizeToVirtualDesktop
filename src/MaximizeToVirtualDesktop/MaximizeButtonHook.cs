@@ -12,16 +12,18 @@ internal sealed class MaximizeButtonHook : IDisposable
 {
     private readonly FullScreenManager _manager;
     private readonly Control _syncControl;
+    private readonly AppSettings _settings;
     private IntPtr _hookHandle;
     private bool _disposed;
 
     // Must be stored as a field to prevent GC collection
     private readonly NativeMethods.LowLevelHookProc _hookProc;
 
-    public MaximizeButtonHook(FullScreenManager manager, Control syncControl)
+    public MaximizeButtonHook(FullScreenManager manager, Control syncControl, AppSettings settings)
     {
         _manager = manager;
         _syncControl = syncControl;
+        _settings = settings;
         _hookProc = HookCallback;
     }
 
@@ -49,8 +51,12 @@ internal sealed class MaximizeButtonHook : IDisposable
     {
         if (nCode >= NativeMethods.HC_ACTION && wParam == (IntPtr)NativeMethods.WM_LBUTTONDOWN)
         {
-            // Is Shift held?
-            if ((NativeMethods.GetAsyncKeyState(NativeMethods.VK_SHIFT) & 0x8000) != 0)
+            bool shiftHeld = (NativeMethods.GetAsyncKeyState(NativeMethods.VK_SHIFT) & 0x8000) != 0;
+            // Normal mode:   Shift+Click  → virtual desktop
+            // Inverted mode: plain Click  → virtual desktop; Shift+Click → normal maximize
+            bool triggerVirtualDesktop = _settings.InvertShiftClick ? !shiftHeld : shiftHeld;
+
+            if (triggerVirtualDesktop)
             {
                 var hookStruct = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
                 var hwnd = NativeMethods.WindowFromPoint(hookStruct.pt);
