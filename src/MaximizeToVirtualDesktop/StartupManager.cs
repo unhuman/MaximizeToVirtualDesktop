@@ -24,8 +24,9 @@ internal static class StartupManager
                 return false;
 
             string exePath = Path.GetFullPath(Application.ExecutablePath);
-            key.SetValue(AppName, exePath);
-            Trace.WriteLine($"StartupManager: Enabled startup for {exePath}");
+            string quotedExePath = $"\"{exePath}\"";
+            key.SetValue(AppName, quotedExePath);
+            Trace.WriteLine($"StartupManager: Enabled startup for {quotedExePath}");
             return true;
         }
         catch (Exception ex)
